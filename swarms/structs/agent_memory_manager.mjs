@@ -1,6 +1,6 @@
 import { v4 as uuidv4 } from 'uuid';
 import YAML from 'yaml';
-import { TikTokenizer } from '../models/tiktoken_wrapper.mjs';
+import { TikTokenizer } from 'tiktoken';
 import { logger } from '../utils/loguru_logger.mjs';
 
 /**
