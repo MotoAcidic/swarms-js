@@ -11,7 +11,7 @@
     "type": "git",
     "url": "https://github.com/kyegomez/swarms-js"
   },
-  "packageManager": "yarn@3.4.1",
+  "packageManager": "yarn@4.1.0",
   "scripts": {
     "build": "turbo run build --filter=\"!test-exports-*\" --concurrency 1",
     "turbo:command": "turbo",
@@ -47,10 +47,14 @@
   },
   "dependencies": {
     "@langchain/openai": "^0.0.18",
+    "chromadb": "latest",
+    "dotenv": "latest",
     "langchain": "^0.1.25",
     "swarms-js": "^0.0.3",
     "turbo": "latest",
-    "winston": "^3.12.0"
+    "uuid": "latest",
+    "winston": "^3.12.0",
+    "yaml": "latest"
   },
   "resolutions": {
     "dpdm@^3.12.0": "patch:dpdm@npm%3A3.12.0#./.yarn/patches/dpdm-npm-3.12.0-0dfdd8e3b8.patch",
