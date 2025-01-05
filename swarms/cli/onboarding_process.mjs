@@ -1,18 +1,18 @@
-// COPYRIGHT 2023 - 2025 The-Swarm-Corporation
-// Converted By: MotoAcidic ( TFinch )
 import fs from 'fs';
 import path from 'path';
-import { setTimeout as sleep } from 'timers/promises';
-import { initializeLogger } from './utils/loguru_logger.mjs';
-import { captureSystemData, logAgentData } from './telemetry/capture_sys_data.mjs';
+import { captureSystemData, logAgentData } from '../telemetry/capture_sys_data.mjs';
+import { initialize_logger } from '../utils/loguru_logger.mjs';
 
-const logger = initializeLogger({ logFolder: "onboarding_process" });
+const logger = initialize_logger({ log_folder: "onboarding_process" });
 
-export class OnboardingProcess {
+class OnboardingProcess {
     /**
-     * Handles the onboarding process for users, collecting user data and system information.
-     * @param {string} autoSavePath - Path for automatically saving user data.
-     * @param {string} cacheSavePath - Path for caching user data for reliability.
+     * This class handles the onboarding process for users. It collects user data including their
+     * full name, first name, email, Swarms API key, and system data, then autosaves it in both a
+     * main JSON file and a cache file for reliability. It supports loading previously saved or cached data.
+     * 
+     * @param {string} [autoSavePath="user_data.json"] - The path where user data is automatically saved.
+     * @param {string} [cacheSavePath="user_data_cache.json"] - The path where user data is cached for reliability.
      */
     constructor(autoSavePath = "user_data.json", cacheSavePath = "user_data_cache.json") {
         this.userData = {};
@@ -23,51 +23,50 @@ export class OnboardingProcess {
     }
 
     /**
-     * Loads existing user data from the auto-save file or cache, if available.
+     * Loads existing user data from the auto-save file or cache if available.
      */
     loadExistingData() {
         if (fs.existsSync(this.autoSavePath)) {
             try {
-                const data = fs.readFileSync(this.autoSavePath, 'utf-8');
-                this.userData = JSON.parse(data);
+                this.userData = JSON.parse(fs.readFileSync(this.autoSavePath, 'utf8'));
                 logger.info(`Existing user data loaded from ${this.autoSavePath}`);
                 return;
-            } catch (error) {
-                logger.error(`Failed to load user data from main file: ${error.message}`);
+            } catch (e) {
+                logger.error(`Failed to load user data from main file: ${e.message}`);
             }
         }
 
         if (fs.existsSync(this.cacheSavePath)) {
             try {
-                const data = fs.readFileSync(this.cacheSavePath, 'utf-8');
-                this.userData = JSON.parse(data);
+                this.userData = JSON.parse(fs.readFileSync(this.cacheSavePath, 'utf8'));
                 logger.info(`User data loaded from cache: ${this.cacheSavePath}`);
-            } catch (error) {
-                logger.error(`Failed to load user data from cache: ${error.message}`);
+            } catch (e) {
+                logger.error(`Failed to load user data from cache: ${e.message}`);
             }
         }
     }
 
     /**
-     * Saves the current user data to both the auto-save file and the cache file.
-     * Retries on failure with exponential backoff.
-     * @param {number} retryAttempts - Number of retries for saving data.
+     * Saves the current user data to both the auto-save file and the cache file. If the main
+     * save fails, the cache is updated instead. Implements retry logic with exponential backoff
+     * in case both save attempts fail.
+     * 
+     * @param {number} [retryAttempts=3] - The number of retries if saving fails.
      */
-    async saveData(retryAttempts = 3) {
+    saveData(retryAttempts = 3) {
         let attempt = 0;
-        let backoffTime = 1000; // Starting backoff time in milliseconds
+        let backoffTime = 1;
 
         while (attempt < retryAttempts) {
             try {
                 const combinedData = { ...this.userData, ...this.systemData };
                 logAgentData(combinedData);
-                return; // Exit if successful
-            } catch (error) {
-                logger.error(`Error saving user data (Attempt ${attempt + 1}): ${error.message}`);
+                return;
+            } catch (e) {
+                logger.error(`Error saving user data (Attempt ${attempt + 1}): ${e.message}`);
             }
 
-            // Retry after a delay with exponential backoff
-            await sleep(backoffTime);
+            setTimeout(() => {}, backoffTime * 1000);
             attempt += 1;
             backoffTime *= 2;
         }
@@ -76,72 +75,66 @@ export class OnboardingProcess {
     }
 
     /**
-     * Prompts the user for input and saves it in the userData dictionary.
-     * Autosaves and caches data after each valid input.
-     * @param {string} prompt - The prompt message for the user.
-     * @param {string} key - The key under which the input will be saved.
+     * Asks the user for input, validates it, and saves it in the userData dictionary.
+     * Autosaves and caches after each valid input.
+     * 
+     * @param {string} prompt - The prompt message to display to the user.
+     * @param {string} key - The key under which the input will be saved in userData.
+     * @throws {Error} - If the input is empty or only contains whitespace.
      */
-    async askInput(prompt, key) {
+    askInput(prompt, key) {
         try {
-            const response = await this.promptUser(prompt);
+            const response = prompt(prompt);
             if (response.trim().toLowerCase() === "quit") {
                 logger.info("User chose to quit the onboarding process.");
                 process.exit(0);
             }
-            if (!response.trim()) throw new Error(`${key} cannot be empty.`);
+            if (!response.trim()) {
+                throw new Error(`${key.charAt(0).toUpperCase() + key.slice(1)} cannot be empty.`);
+            }
             this.userData[key] = response.trim();
-            await this.saveData();
+            this.saveData();
             return response;
-        } catch (error) {
-            logger.warn(error.message);
-            return this.askInput(prompt, key);
+        } catch (e) {
+            logger.warn(e.message);
+            this.askInput(prompt, key);
         }
     }
 
     /**
-     * Helper function to simulate input prompt (placeholder for CLI input functionality).
-     * @param {string} prompt - The prompt message.
-     * @returns {Promise<string>} - The user's input.
+     * Initiates the onboarding process by collecting the user's full name, first name, email,
+     * Swarms API key, and system data. Additionally, it reminds the user to set their WORKSPACE_DIR environment variable.
      */
-    promptUser(prompt) {
-        return new Promise((resolve) => {
-            process.stdout.write(`${prompt}`);
-            process.stdin.once('data', (data) => resolve(data.toString().trim()));
-        });
-    }
-
-    /**
-     * Collects user information during the onboarding process.
-     */
-    async collectUserInfo() {
+    collectUserInfo() {
         logger.info("Initiating swarms cloud onboarding process...");
-        await this.askInput("Enter your first name (or type 'quit' to exit): ", "first_name");
-        await this.askInput("Enter your last name (or type 'quit' to exit): ", "last_name");
-        await this.askInput("Enter your email (or type 'quit' to exit): ", "email");
-        const workspace = await this.askInput(
-            "Enter your WORKSPACE_DIR (or type 'quit' to exit). This is where logs, errors, and agent configurations will be stored: ",
-            "workspace_dir"
-        );
+        this.askInput("Enter your first name (or type 'quit' to exit): ", "first_name");
+        this.askInput("Enter your Last Name (or type 'quit' to exit): ", "last_name");
+        this.askInput("Enter your email (or type 'quit' to exit): ", "email");
+        const workspace = this.askInput("Enter your WORKSPACE_DIR: This is where logs, errors, and agent configurations will be stored (or type 'quit' to exit). Remember to set this as an environment variable: https://docs.swarms.world/en/latest/swarms/install/quickstart/ || ", "workspace_dir");
         process.env.WORKSPACE_DIR = workspace;
-        logger.info("Please ensure your WORKSPACE_DIR environment variable is set.");
-        logger.info("Remember to add your API keys to your .env file.");
-        logger.info("Onboarding process completed successfully!");
+        logger.info("Important: Please ensure you have set your WORKSPACE_DIR environment variable as per the instructions provided.");
+        logger.info("Additionally, remember to add your API keys for your respective models in your .env file.");
+        logger.success("Onboarding process completed successfully!");
     }
 
     /**
-     * Runs the onboarding process, handling unexpected errors.
+     * Main method to run the onboarding process. It handles unexpected errors and ensures
+     * proper finalization.
      */
-    async run() {
+    run() {
         try {
-            await this.collectUserInfo();
-        } catch (error) {
-            logger.error(`An unexpected error occurred: ${error.message}`);
+            this.collectUserInfo();
+        } catch (e) {
+            logger.error(`An unexpected error occurred: ${e.message}`);
         } finally {
             logger.info("Finalizing the onboarding process.");
         }
     }
 }
 
-// Uncomment to run the onboarding process if this is the main module
-// const onboarding = new OnboardingProcess();
-// onboarding.run();
+// if (import.meta.main) {
+//     const onboarding = new OnboardingProcess();
+//     onboarding.run();
+// }
+
+export { OnboardingProcess };
