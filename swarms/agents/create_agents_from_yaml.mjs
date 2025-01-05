@@ -1,156 +1,150 @@
-// COPYRIGHT 2023 - 2025 The-Swarm-Corporation
-// Converted By: MotoAcidic ( TFinch )
 import fs from 'fs';
-import yaml from 'yaml';
-import { retry, stopAfterAttempt, waitExponential, retryIfExceptionType } from 'tenacity';
-import { initializeLogger } from './utils/loguru_logger.mjs';
-import { Agent } from './structs/agent.mjs';
-import { SwarmRouter } from './structs/swarm_router.mjs';
-import { LiteLLM } from './utils/litellm_wrapper.mjs';
+import yaml from 'js-yaml';
+import retry from 'async-retry';
+import { BaseModel, Field } from 'pydantic';
+import { initialize_logger } from '../utils/loguru_logger.mjs';
+import { Agent } from '../structs/agent.mjs';
+import { SwarmRouter } from '../structs/swarm_router.mjs';
+import { LiteLLM } from '../utils/litellm_wrapper.mjs';
 
-const logger = initializeLogger({ logFolder: "create_agents_from_yaml" });
+const logger = initialize_logger({ log_folder: "create_agents_from_yaml" });
 
-/**
- * Validates and processes the configuration for an agent.
- */
-class AgentConfig {
-    constructor(config) {
-        this.agentName = config.agent_name;
-        this.systemPrompt = config.system_prompt;
-        this.modelName = config.model_name || null;
-        this.maxLoops = config.max_loops || 1;
-        this.autosave = config.autosave || true;
-        this.dashboard = config.dashboard || false;
-        this.verbose = config.verbose || false;
-        this.dynamicTemperatureEnabled = config.dynamic_temperature_enabled || false;
-        this.savedStatePath = config.saved_state_path || null;
-        this.userName = config.user_name || "default_user";
-        this.retryAttempts = config.retry_attempts || 3;
-        this.contextLength = config.context_length || 100000;
-        this.returnStepMeta = config.return_step_meta || false;
-        this.outputType = config.output_type || "str";
-        this.autoGeneratePrompt = config.auto_generate_prompt || false;
-        this.artifactsOn = config.artifacts_on || false;
-        this.artifactsFileExtension = config.artifacts_file_extension || ".md";
-        this.artifactsOutputPath = config.artifacts_output_path || "";
+class AgentConfig extends BaseModel {
+    agent_name = Field(null);
+    system_prompt = Field(null);
+    model_name = Field(null, { default: null });
+    max_loops = Field(1, { ge: 1 });
+    autosave = Field(true);
+    dashboard = Field(false);
+    verbose = Field(false);
+    dynamic_temperature_enabled = Field(false);
+    saved_state_path = Field(null, { default: null });
+    user_name = Field("default_user");
+    retry_attempts = Field(3, { ge: 1 });
+    context_length = Field(100000, { ge: 1000 });
+    return_step_meta = Field(false);
+    output_type = Field("str");
+    auto_generate_prompt = Field(false);
+    artifacts_on = Field(false);
+    artifacts_file_extension = Field(".md");
+    artifacts_output_path = Field("");
+}
 
-        if (!this.systemPrompt || typeof this.systemPrompt !== "string" || this.systemPrompt.trim().length === 0) {
-            throw new Error("System prompt must be a non-empty string");
-        }
-    }
+class SwarmConfig extends BaseModel {
+    name = Field(null);
+    description = Field(null);
+    max_loops = Field(1, { ge: 1 });
+    swarm_type = Field(null);
+    task = Field(null, { default: null });
+    flow = Field(null, { default: null });
+    autosave = Field(true);
+    return_json = Field(false);
+    rules = Field("");
+}
+
+class YAMLConfig extends BaseModel {
+    agents = Field([], { min_length: 1 });
+    swarm_architecture = Field(null, { default: null });
+
+    static model_config = {
+        extra: "forbid"
+    };
 }
 
 /**
- * Validates and processes the configuration for a swarm.
+ * Safely load and validate YAML configuration using Pydantic.
+ * 
+ * @param {string} [yamlFile=null] - Path to the YAML file.
+ * @param {string} [yamlString=null] - YAML content as a string.
+ * @returns {Object} - Parsed and validated YAML content.
+ * @throws {Error} - If there is an error parsing or validating the YAML content.
  */
-class SwarmConfig {
-    constructor(config) {
-        this.name = config.name;
-        this.description = config.description;
-        this.maxLoops = config.max_loops || 1;
-        this.swarmType = config.swarm_type;
-        this.task = config.task || null;
-        this.flow = config.flow || null;
-        this.autosave = config.autosave || true;
-        this.returnJson = config.return_json || false;
-        this.rules = config.rules || "";
-
-        const validTypes = new Set([
-            "SequentialWorkflow",
-            "ConcurrentWorkflow",
-            "AgentRearrange",
-            "MixtureOfAgents",
-            "auto",
-        ]);
-        if (!validTypes.has(this.swarmType)) {
-            throw new Error(`Swarm type must be one of: ${Array.from(validTypes).join(", ")}`);
-        }
-    }
-}
-
-/**
- * Loads and validates a YAML configuration file or string.
- */
-function loadYamlSafely({ yamlFile = null, yamlString = null }) {
+function loadYamlSafely(yamlFile = null, yamlString = null) {
     try {
         let configDict;
         if (yamlString) {
-            configDict = yaml.parse(yamlString);
+            configDict = yaml.load(yamlString);
         } else if (yamlFile) {
             if (!fs.existsSync(yamlFile)) {
                 throw new Error(`YAML file ${yamlFile} not found.`);
             }
-            const fileContent = fs.readFileSync(yamlFile, "utf-8");
-            configDict = yaml.parse(fileContent);
+            configDict = yaml.load(fs.readFileSync(yamlFile, 'utf8'));
         } else {
             throw new Error("Either yamlFile or yamlString must be provided");
         }
 
-        // Validate using JavaScript equivalent of Pydantic
-        if (!configDict.agents || !Array.isArray(configDict.agents) || configDict.agents.length < 1) {
-            throw new Error("Invalid YAML: Must contain at least one agent configuration.");
-        }
+        YAMLConfig.model_validate(configDict);
         return configDict;
-    } catch (error) {
-        throw new Error(`Error validating configuration: ${error.message}`);
+    } catch (e) {
+        throw new Error(`Error parsing or validating YAML: ${e.message}`);
     }
 }
 
 /**
- * Creates an agent with retry logic to handle transient failures.
+ * Create an agent with retry logic for handling transient failures.
+ * 
+ * @param {Object} agentConfig - Configuration for the agent.
+ * @param {LiteLLM} model - The model to be used by the agent.
+ * @returns {Agent} - The created agent.
+ * @throws {Error} - If there is an error creating the agent.
  */
-const createAgentWithRetry = retry(
-    async function (agentConfig, model) {
+async function createAgentWithRetry(agentConfig, model) {
+    return retry(async () => {
         try {
             const validatedConfig = new AgentConfig(agentConfig);
-            return new Agent({
-                agentName: validatedConfig.agentName,
-                systemPrompt: validatedConfig.systemPrompt,
+            const agent = new Agent({
+                agent_name: validatedConfig.agent_name,
+                system_prompt: validatedConfig.system_prompt,
                 llm: model,
-                maxLoops: validatedConfig.maxLoops,
+                max_loops: validatedConfig.max_loops,
                 autosave: validatedConfig.autosave,
                 dashboard: validatedConfig.dashboard,
                 verbose: validatedConfig.verbose,
-                dynamicTemperatureEnabled: validatedConfig.dynamicTemperatureEnabled,
-                savedStatePath: validatedConfig.savedStatePath,
-                userName: validatedConfig.userName,
-                retryAttempts: validatedConfig.retryAttempts,
-                contextLength: validatedConfig.contextLength,
-                returnStepMeta: validatedConfig.returnStepMeta,
-                outputType: validatedConfig.outputType,
-                autoGeneratePrompt: validatedConfig.autoGeneratePrompt,
-                artifactsOn: validatedConfig.artifactsOn,
-                artifactsFileExtension: validatedConfig.artifactsFileExtension,
-                artifactsOutputPath: validatedConfig.artifactsOutputPath,
+                dynamic_temperature_enabled: validatedConfig.dynamic_temperature_enabled,
+                saved_state_path: validatedConfig.saved_state_path,
+                user_name: validatedConfig.user_name,
+                retry_attempts: validatedConfig.retry_attempts,
+                context_length: validatedConfig.context_length,
+                return_step_meta: validatedConfig.return_step_meta,
+                output_type: validatedConfig.output_type,
+                auto_generate_prompt: validatedConfig.auto_generate_prompt,
+                artifacts_on: validatedConfig.artifacts_on,
+                artifacts_file_extension: validatedConfig.artifacts_file_extension,
+                artifacts_output_path: validatedConfig.artifacts_output_path,
             });
-        } catch (error) {
-            logger.error(`Error creating agent ${agentConfig.agent_name || "unknown"}: ${error.message}`);
-            throw error;
+            return agent;
+        } catch (e) {
+            logger.error(`Error creating agent ${agentConfig.agent_name || 'unknown'}: ${e.message}`);
+            throw e;
         }
-    },
-    {
-        stop: stopAfterAttempt(3),
-        wait: waitExponential({ multiplier: 1, min: 4, max: 10 }),
-        retry: retryIfExceptionType([ConnectionError, TimeoutError]),
-        beforeRetry: (retryState) => {
-            logger.info(`Retrying after error: ${retryState.outcome.exception().message}`);
-        },
-    }
-);
+    }, {
+        retries: 3,
+        minTimeout: 4000,
+        maxTimeout: 10000
+    });
+}
 
 /**
- * Creates agents and/or a SwarmRouter from YAML configurations.
+ * Create agents and/or SwarmRouter based on configurations defined in a YAML file or string.
+ * 
+ * @param {Function} [model=null] - The model to be used by the agents.
+ * @param {string} [yamlFile="agents.yaml"] - Path to the YAML file.
+ * @param {string} [yamlString=null] - YAML content as a string.
+ * @param {string} [returnType="auto"] - The type of return value.
+ * @returns {Promise<any>} - The created agents and/or SwarmRouter.
+ * @throws {Error} - If there is an error creating the agents or SwarmRouter.
  */
-async function createAgentsFromYaml({ model = null, yamlFile = "agents.yaml", yamlString = null, returnType = "auto" }) {
+async function createAgentsFromYaml({ model = null, yamlFile = "agents.yaml", yamlString = null, returnType = "auto" } = {}) {
     const agents = [];
     let swarmRouter = null;
 
     try {
-        const config = loadYamlSafely({ yamlFile, yamlString });
+        const config = loadYamlSafely(yamlFile, yamlString);
 
         for (const agentConfig of config.agents) {
             logger.info(`Creating agent: ${agentConfig.agent_name}`);
-            const modelInstance = new LiteLLM({ modelName: agentConfig.model_name || "gpt-4o" });
+
+            const modelInstance = agentConfig.model_name ? new LiteLLM({ modelName: agentConfig.model_name }) : new LiteLLM({ modelName: "gpt-4o" });
 
             const agent = await createAgentWithRetry(agentConfig, modelInstance);
             logger.info(`Agent ${agentConfig.agent_name} created successfully.`);
@@ -158,47 +152,60 @@ async function createAgentsFromYaml({ model = null, yamlFile = "agents.yaml", ya
         }
 
         if (config.swarm_architecture) {
-            const swarmConfig = new SwarmConfig(config.swarm_architecture);
-            swarmRouter = new SwarmRouter({
-                name: swarmConfig.name,
-                description: swarmConfig.description,
-                maxLoops: swarmConfig.maxLoops,
-                agents,
-                swarmType: swarmConfig.swarmType,
-                task: swarmConfig.task,
-                flow: swarmConfig.flow,
-                autosave: swarmConfig.autosave,
-                returnJson: swarmConfig.returnJson,
-                rules: swarmConfig.rules,
-            });
-            logger.info(`SwarmRouter '${swarmConfig.name}' created successfully.`);
+            try {
+                const swarmConfig = new SwarmConfig(config.swarm_architecture);
+                swarmRouter = new SwarmRouter({
+                    name: swarmConfig.name,
+                    description: swarmConfig.description,
+                    max_loops: swarmConfig.max_loops,
+                    agents,
+                    swarm_type: swarmConfig.swarm_type,
+                    task: swarmConfig.task,
+                    flow: swarmConfig.flow,
+                    autosave: swarmConfig.autosave,
+                    return_json: swarmConfig.return_json,
+                    rules: swarmConfig.rules,
+                });
+                logger.info(`SwarmRouter '${swarmConfig.name}' created successfully.`);
+            } catch (e) {
+                logger.error(`Error creating SwarmRouter: ${e.message}`);
+                throw new Error(`Failed to create SwarmRouter: ${e.message}`);
+            }
         }
 
-        const validReturnTypes = new Set(["auto", "swarm", "agents", "both", "tasks", "run_swarm"]);
-        if (!validReturnTypes.has(returnType)) {
-            throw new Error(`Invalid return_type. Must be one of: ${Array.from(validReturnTypes).join(", ")}`);
+        const validReturnTypes = ["auto", "swarm", "agents", "both", "tasks", "run_swarm"];
+        if (!validReturnTypes.includes(returnType)) {
+            throw new Error(`Invalid returnType. Must be one of: ${validReturnTypes.join(', ')}`);
         }
 
-        switch (returnType) {
-            case "run_swarm":
-            case "swarm":
-                if (!swarmRouter) {
-                    throw new Error("Cannot run swarm: SwarmRouter not created.");
-                }
-                return swarmRouter.run(config.swarm_architecture.task);
-            case "agents":
-                return agents.length === 1 ? agents[0] : agents;
-            case "both":
-                return [swarmRouter, agents];
-            case "tasks":
-                return [];
-            default:
-                return swarmRouter || (agents.length === 1 ? agents[0] : agents);
+        if (returnType === "run_swarm" || returnType === "swarm") {
+            if (!swarmRouter) {
+                throw new Error("Cannot run swarm: SwarmRouter not created.");
+            }
+            try {
+                return await swarmRouter.run(config.swarm_architecture.task);
+            } catch (e) {
+                logger.error(`Error running SwarmRouter: ${e.message}`);
+                throw e;
+            }
         }
-    } catch (error) {
-        logger.error(`Critical error in createAgentsFromYaml: ${error.message}`);
-        throw error;
+
+        if (returnType === "auto") {
+            return swarmRouter || (agents.length === 1 ? agents[0] : agents);
+        } else if (returnType === "swarm") {
+            return swarmRouter || (agents.length === 1 ? agents[0] : agents);
+        } else if (returnType === "agents") {
+            return agents.length === 1 ? agents[0] : agents;
+        } else if (returnType === "both") {
+            return [swarmRouter || (agents.length === 1 ? agents[0] : agents), agents];
+        } else if (returnType === "tasks") {
+            return [];
+        }
+
+    } catch (e) {
+        logger.error(`Critical error in createAgentsFromYaml: ${e.message}`);
+        throw e;
     }
 }
 
-export { loadYamlSafely, createAgentWithRetry, createAgentsFromYaml };
+export { createAgentsFromYaml };
