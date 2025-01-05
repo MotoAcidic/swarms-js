@@ -1,10 +1,10 @@
 import { v4 as uuidv4 } from 'uuid';
 import yaml from 'js-yaml';
 import toml from '@iarna/toml';
-import { TikTokenizer } from '../models/tiktoken_wrapper.mjs';
+import pkg from 'tiktoken';
+const { TikTokenizer } = pkg;
 import { logger } from '../utils/loguru_logger.mjs';
 import { formatToPanel } from '../utils/formatter.mjs';
-import { Agent } from '../agent.mjs';
 import { Conversation } from './conversation.mjs';
 import { BaseTool } from '../tools/base_tool.mjs';
 import { SafeStateManager, SafeLoaderUtils } from './safe_loading.mjs';

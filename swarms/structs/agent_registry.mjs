@@ -1,4 +1,4 @@
-import { Agent } from '../agent.mjs';
+import { Agent } from './agent.mjs';
 import { logger } from '../utils/loguru_logger.mjs';
 
 /**

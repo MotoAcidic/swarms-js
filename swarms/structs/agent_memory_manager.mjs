@@ -1,7 +1,11 @@
 import { v4 as uuidv4 } from 'uuid';
 import YAML from 'yaml';
-import { TikTokenizer } from 'tiktoken';
-import { logger } from '../utils/loguru_logger.mjs';
+import pkg from 'tiktoken';
+const { TikTokenizer } = pkg;
+import { initializeLogger } from '../utils/loguru_logger.mjs';
+import fs from 'fs';
+
+const logger = initializeLogger();
 
 /**
  * Metadata for memory entries
@@ -42,7 +46,7 @@ class MemoryEntry {
 /**
  * Configuration for memory manager
  */
-class MemoryConfig {
+export class MemoryConfig {
     constructor({
         maxShortTermTokens = 4096,
         maxEntries = null,
@@ -145,7 +149,15 @@ export class MemoryManager {
         return currentUsage >= this.config.archiveThreshold;
     }
 
-    // ... Additional converted methods ...
+    // Add the missing getMemoryStats method
+    getMemoryStats() {
+        return {
+            totalTokensProcessed: this.totalTokensProcessed,
+            archivedEntriesCount: this.archivedEntriesCount,
+            currentTokenCount: this.getCurrentTokenCount(),
+            systemMessagesTokenCount: this.getSystemMessagesTokenCount(),
+        };
+    }
 
     /**
      * Save current memory state to file
@@ -175,6 +187,8 @@ export class MemoryManager {
 
     // ... Additional method implementations following same patterns ...
 }
+
+export { MemoryMetadata, MemoryEntry };
 
 // Example usage:
 /*

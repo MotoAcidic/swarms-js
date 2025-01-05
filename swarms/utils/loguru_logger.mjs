@@ -1,6 +1,5 @@
-import os from 'os';
 import { v4 as uuidv4 } from 'uuid';
-import { logger } from 'loguru';
+import winston from 'winston';
 import fs from 'fs';
 import path from 'path';
 
@@ -22,14 +21,19 @@ function initializeLogger(logFolder = 'logs') {
     const uuidForLog = uuidv4();
     const logFilePath = path.join(logFolderPath, `${logFolder}_${uuidForLog}.log`);
 
-    logger.add(logFilePath, {
+    const logger = winston.createLogger({
         level: 'info',
-        colorize: true,
-        backtrace: true,
-        diagnose: true,
-        enqueue: true,
-        retention: '10 days',
-        // compression: 'zip',
+        format: winston.format.combine(
+            winston.format.colorize(),
+            winston.format.timestamp(),
+            winston.format.printf(({ timestamp, level, message }) => {
+                return `${timestamp} ${level}: ${message}`;
+            })
+        ),
+        transports: [
+            new winston.transports.Console(),
+            new winston.transports.File({ filename: logFilePath })
+        ],
     });
 
     return logger;
@@ -38,3 +42,5 @@ function initializeLogger(logFolder = 'logs') {
 // Example usage:
 // const logger = initializeLogger();
 // logger.info('Logger initialized');
+
+export { initializeLogger };

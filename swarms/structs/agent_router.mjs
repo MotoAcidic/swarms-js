@@ -1,5 +1,5 @@
 import { ChromaClient } from 'chromadb';
-import { Agent } from '../agent.mjs';
+import { Agent } from './agent.mjs';
 import { initializeLogger } from '../utils/loguru_logger.mjs';
 
 const logger = initializeLogger('agent_router');
